@@ -1,0 +1,4 @@
+interface:
+  display_name: "Photo Zine Collage"
+  short_description: "Create palette-matched zines with varied layouts"
+  default_prompt: "Use $photo-zine-collage to turn this photo into a palette-matched zine with a source-driven layout and an automatic English micro-text line."

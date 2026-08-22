@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 from typing import Optional
 
+from compose_anchor import parse_box, parse_center
 from extract_palette import extract_palette
 
 
@@ -78,14 +80,28 @@ LEGACY_POSITIONS = {
 
 
 QUIET_TEXT_POSITIONS = {
-    "center-island": "a quiet lower corner opposite the heavier painted mass",
-    "upper-band": "a quiet lower paper corner",
-    "lower-band": "a quiet upper paper corner",
-    "offset-left": "quiet paper on the upper-right or lower-right",
-    "offset-right": "quiet paper on the upper-left or lower-left",
-    "diagonal-rise": "the quiet upper-left paper pocket",
-    "diagonal-fall": "the quiet upper-right paper pocket",
-    "split-fragments": "the largest quiet paper pocket away from both fragments",
+    "center-island": "lower-right",
+    "upper-band": "lower-right",
+    "lower-band": "upper-right",
+    "offset-left": "upper-right",
+    "offset-right": "upper-left",
+    "diagonal-rise": "upper-left",
+    "diagonal-fall": "upper-right",
+    "split-fragments": "lower-right",
+}
+
+
+# Stable restoration footprints make the generated fragment and the exact local
+# source-pixel replacement agree without a second visual-planning pass.
+ANCHOR_PRESETS = {
+    "center-island": {"box": (0.18, 0.25, 0.64, 0.46), "rotation": 0.0},
+    "upper-band": {"box": (0.0, 0.0, 1.0, 0.32), "rotation": 0.0},
+    "lower-band": {"box": (0.0, 0.68, 1.0, 0.32), "rotation": 0.0},
+    "offset-left": {"box": (0.05, 0.24, 0.62, 0.48), "rotation": 0.0},
+    "offset-right": {"box": (0.33, 0.24, 0.62, 0.48), "rotation": 0.0},
+    "diagonal-rise": {"box": (0.14, 0.25, 0.72, 0.46), "rotation": -8.0},
+    "diagonal-fall": {"box": (0.14, 0.25, 0.72, 0.46), "rotation": 8.0},
+    "split-fragments": {"box": (0.08, 0.22, 0.62, 0.46), "rotation": 0.0},
 }
 
 
@@ -165,6 +181,41 @@ def validate_micro_text(text: str) -> str:
     return cleaned
 
 
+def build_finishing_plan(
+    scene: str,
+    layout: str = "auto",
+    layout_seed: int = 0,
+    micro_text: str = "",
+    no_text: bool = False,
+    text_position: str = "auto",
+    anchor_position: Optional[str] = None,
+    anchor_box: tuple[float, float, float, float] | None = None,
+    crop_center: tuple[float, float] = (0.5, 0.5),
+) -> dict[str, object]:
+    if anchor_box is not None:
+        x, y, width, height = anchor_box
+        if min(anchor_box) < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            raise ValueError("anchor box must fit inside normalized 0..1 bounds")
+    if len(crop_center) != 2 or any(not 0 <= part <= 1 for part in crop_center):
+        raise ValueError("crop center must contain two numbers from 0 to 1")
+    selected_layout = resolve_layout(layout, scene, layout_seed, anchor_position)
+    selected_text = "" if no_text else validate_micro_text(micro_text or suggest_micro_text(scene))
+    selected_text_position = (
+        QUIET_TEXT_POSITIONS[selected_layout] if text_position == "auto" else text_position
+    )
+    preset = ANCHOR_PRESETS[selected_layout]
+    selected_box = anchor_box or preset["box"]
+    return {
+        "layout": selected_layout,
+        "micro_text": selected_text,
+        "text_position": selected_text_position,
+        "text_free": no_text,
+        "anchor_box": list(selected_box),
+        "anchor_rotation": preset["rotation"],
+        "crop_center": list(crop_center),
+    }
+
+
 def build_prompt(
     image: Path,
     style: str,
@@ -179,6 +230,9 @@ def build_prompt(
     colors: int = 6,
     color_note: str = "",
     anchor_position: Optional[str] = None,
+    anchor_box: tuple[float, float, float, float] | None = None,
+    crop_center: tuple[float, float] = (0.5, 0.5),
+    palette_report: dict[str, object] | None = None,
 ) -> str:
     if style not in STYLE_BLOCKS:
         raise ValueError(f"unknown style: {style}")
@@ -191,13 +245,28 @@ def build_prompt(
     if no_text and micro_text:
         raise ValueError("use either --micro-text or --no-text, not both")
 
-    selected_layout = resolve_layout(layout, scene, layout_seed, anchor_position)
-    selected_text = "" if no_text else validate_micro_text(micro_text or suggest_micro_text(scene))
-    selected_text_position = (
-        QUIET_TEXT_POSITIONS[selected_layout] if text_position == "auto" else text_position
+    plan = build_finishing_plan(
+        scene,
+        layout,
+        layout_seed,
+        micro_text,
+        no_text,
+        text_position,
+        anchor_position,
+        anchor_box,
+        crop_center,
+    )
+    selected_layout = str(plan["layout"])
+    selected_text_position = str(plan["text_position"])
+    box = plan["anchor_box"]
+    assert isinstance(box, list)
+    box_instruction = (
+        f"Keep the main locally restorable photo fragment at approximately {box[0] * 100:.0f}% from "
+        f"the left and {box[1] * 100:.0f}% from the top, spanning {box[2] * 100:.0f}% of canvas width "
+        f"and {box[3] * 100:.0f}% of canvas height."
     )
 
-    report = extract_palette(image, colors=colors)
+    report = palette_report or extract_palette(image, colors=colors)
     palette = report["palette"]
     contract = report["prompt_contract"]
     dominant = palette[0]
@@ -214,17 +283,15 @@ def build_prompt(
         else ""
     )
     text_instruction = (
-        f'Render exactly one English micro-text line: "{selected_text}". Place it in '
-        f"{selected_text_position}, at roughly 1.4–2.2% of poster height. Use small, lightly worn "
-        "typewriter or letterpress lettering in warm charcoal or a restrained source color. Keep it "
-        "legible, quiet, and subordinate. Preserve any text or provenance already inside the photo, "
-        "and add no other new letters, numbers, labels, signatures, or pseudo-text."
-        if selected_text
-        else "Preserve text or provenance already inside the photo, but add no new letters, numbers, labels, signatures, or pseudo-text."
+        f"Leave a calm, low-detail paper pocket in the {selected_text_position} for typography that "
+        "will be added locally after generation. Do not render any new letters, numbers, labels, "
+        "signatures, or pseudo-text. Preserve text or provenance already inside the photo."
+        if not no_text
+        else "Preserve text or provenance already inside the photo, but render no new letters, numbers, labels, signatures, or pseudo-text."
     )
 
     return f"""Task and layout
-Edit the supplied photograph into a vertical 3:5 handmade editorial zine collage. The supplied image is the edit target, not a loose mood reference. Selected layout: {selected_layout}. {LAYOUT_SPECS[selected_layout]} Keep the combined photographic area near {anchor_share}% of the canvas, adjusted by visual weight. Leave at least one calm paper pocket. Use a flat front-facing scan with no frame or tabletop mockup.
+Edit the supplied photograph into a vertical 3:5 handmade editorial zine collage. The supplied image is the edit target, not a loose mood reference. Selected layout: {selected_layout}. {LAYOUT_SPECS[selected_layout]} {box_instruction} Keep the combined photographic area near {anchor_share}% of the canvas, adjusted by visual weight. Leave at least one calm paper pocket. Use a flat front-facing scan with no frame or tabletop mockup.
 
 Photo lock and scene continuity
 The photo shows: {scene}. Keep unchanged: {must_keep}. Inside every photo fragment, preserve the original photographic identity, geometry, texture, local contrast, white balance, and color. Do not repaint, smooth, stylize, relight, crop away the protected subject, or globally grade it. Continue at least two real source edges—such as a horizon, path, roofline, branch direction, body gesture, or shadow—into the generated field. Match source light direction and local contrast across each join.
@@ -235,8 +302,8 @@ Use these source-derived colors in approximately this visual order: {contract}. 
 Selected style: {style}
 {STYLE_BLOCKS[style]} Keep the result painterly and handmade without imitating a named artist. At each material join, show a narrow, irregular torn-paper/fiber interruption along only part of the fragment; vary the edge naturally, keep it flat, and let a few source-derived paint marks pass over or under it. The seam must combine aligned geometry, matched palette, and a readable paper change.
 
-Text and hard constraints
-{text_instruction} No unrelated photographs or scenery, decorative stickers, uniform white outlines, strong drop shadows, curled paper, glossy depth, logos, calls to action, watermark removal, or fabricated credits. The final image should read as one coherent scene assembled from truthful photography, paper, painting, and one restrained editorial text trace."""
+Local finishing space and hard constraints
+{text_instruction} No unrelated photographs or scenery, decorative stickers, uniform white outlines, strong drop shadows, curled paper, glossy depth, logos, calls to action, watermark removal, or fabricated credits. The generated image should read as one coherent scene assembled from truthful photography, paper, and painting, with the requested quiet pocket left empty for local finishing."""
 
 
 def main() -> None:
@@ -262,7 +329,23 @@ def main() -> None:
     )
     parser.add_argument("--colors", type=int, default=6)
     parser.add_argument("--color-note", default="")
+    parser.add_argument(
+        "--anchor-box",
+        type=parse_box,
+        help="normalized x,y,width,height restoration footprint; defaults from the selected layout",
+    )
+    parser.add_argument(
+        "--crop-center",
+        type=parse_center,
+        default=(0.5, 0.5),
+        help="normalized source focus retained during the final local restoration",
+    )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--plan-output",
+        type=Path,
+        help="save the local finishing layout and exact micro-text as JSON",
+    )
     args = parser.parse_args()
 
     if not args.image.is_file():
@@ -282,15 +365,37 @@ def main() -> None:
             colors=args.colors,
             color_note=args.color_note.strip(),
             anchor_position=args.anchor_position,
+            anchor_box=args.anchor_box,
+            crop_center=args.crop_center,
         )
     except ValueError as exc:
         parser.error(str(exc))
 
     if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(prompt + "\n", encoding="utf-8")
         print(f"Saved {args.output}")
     else:
         print(prompt)
+
+    if args.plan_output:
+        plan = build_finishing_plan(
+            args.scene.strip(),
+            args.layout,
+            args.layout_seed,
+            args.micro_text,
+            args.no_text,
+            args.text_position,
+            args.anchor_position,
+            args.anchor_box,
+            args.crop_center,
+        )
+        args.plan_output.parent.mkdir(parents=True, exist_ok=True)
+        args.plan_output.write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Saved {args.plan_output}")
 
 
 if __name__ == "__main__":

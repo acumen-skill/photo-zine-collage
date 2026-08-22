@@ -22,9 +22,10 @@ The skill supports two visual modes:
 
 - Selects from eight source-informed layouts, including upper/lower bands, offset compositions, diagonals, and split fragments.
 - Extracts a weighted source palette and carries it into the generation prompt.
-- Creates one scene-matched English micro-text line by default, or accepts exact wording or a text-free request.
-- Treats the source photograph as an edit target rather than a loose style reference.
-- Can restore an ungraded source-photo fragment when generation changes identity, geometry, or important colors.
+- Creates one scene-matched English micro-text line locally and deterministically, or accepts exact wording or a text-free request.
+- Sends a bounded working copy to the image editor while retaining the original locally; small standard JPEGs are copied byte-for-byte instead of being expanded to PNG.
+- Restores an ungraded original-photo fragment on every normal run.
+- Uses one remote generation by default and never retries automatically.
 - Provides palette comparison and failure-specific quality gates.
 - Preserves existing signatures, provenance marks, and watermarks.
 
@@ -65,47 +66,48 @@ Use $photo-zine-collage with the exact micro-text "Still Water".
 Use $photo-zine-collage and make the result text-free.
 ```
 
-The normal workflow is:
+The normal fast path is:
 
-1. Inspect the photo and protect important identities and geometry.
-2. Extract a weighted source palette.
-3. Compile a layout-aware image-editing prompt.
-4. Generate the zine through an available image-editing tool.
-5. Restore exact source pixels when necessary.
-6. Review the result at normal size and as a thumbnail.
+1. Run one batched local preparation command for the working copy, palette, prompt, and deterministic finishing plan.
+2. Generate once through an available image-editing tool.
+3. Run one batched local finishing command for exact source-pixel restoration, micro-text, and palette audit.
+4. Review the final image once.
 
 The full operating instructions live in [`SKILL.md`](SKILL.md).
 
 ## Deterministic helpers
 
-Run the helper scripts from the repository root:
+Run the batched helpers from the repository root:
 
 ```bash
-python3 scripts/extract_palette.py path/to/photo.jpg --colors 6
-
-python3 scripts/build_prompt.py \
-  --image path/to/photo.jpg \
+python3 scripts/collage_pipeline.py prepare \
+  --source path/to/photo.jpg \
+  --output-dir path/to/output \
+  --stem sample \
   --style realist-fine-lines \
   --scene "a person walking along diagonal stone steps" \
   --must-keep "identity, pose, stair perspective, and original colors" \
+  --layout diagonal-rise \
+  --crop-center 0.5,0.5 \
   --micro-text "Light Between Steps"
 
-python3 scripts/check_palette.py \
+python3 scripts/collage_pipeline.py finish \
+  --generated path/to/generated.png \
   --source path/to/photo.jpg \
-  --result path/to/final.png \
-  --result-box 0.18,0.22,0.64,0.52
+  --plan path/to/output/sample-finishing-plan.json \
+  --output path/to/output/sample-final.png
 ```
 
-Each CLI provides full argument details through `--help`.
+The lower-level single-purpose helpers remain available for debugging and custom workflows.
 
 ## Scope and limitations
 
 - Produces a single portrait zine image, not a multi-page publication.
 - Does not provide print production, CMYK conversion, bleed, binding, PDF export, or batch processing.
-- Final rendering quality and exact typography depend on the image generation/editing tool.
+- Final painterly rendering quality depends on the image generation/editing tool; exact typography is rendered locally.
 - Automatic layout and fallback micro-text use the agent-authored scene description; they do not perform independent computer vision.
 - Palette comparison is a global diagnostic and does not replace visual inspection of skin, products, provenance marks, or other local colors.
-- The optional anchor compositor uses a centered source crop and is not a full layout editor.
+- The fast path uses stable per-layout restoration footprints and a preselected crop center. A custom anchor box remains available for nonstandard layouts.
 
 ## Privacy and source images
 
@@ -121,7 +123,7 @@ Run the automated tests:
 python3 -m unittest discover -s tests -v
 ```
 
-The test suite covers palette extraction, both prompt styles, layout selection, micro-text constraints, image normalization, anchor restoration, and palette comparison.
+The test suite covers the batched fast path, byte-identical JPEG reuse, working-copy preparation, palette extraction, both prompt styles, layout selection, local micro-text, image normalization, anchor restoration, and palette comparison.
 
 ## License
 

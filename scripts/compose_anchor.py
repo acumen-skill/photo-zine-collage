@@ -26,8 +26,22 @@ def parse_box(value: str) -> tuple[float, float, float, float]:
     return x, y, width, height
 
 
-def cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
-    return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+def parse_center(value: str) -> tuple[float, float]:
+    try:
+        center = tuple(float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("crop center must be x,y") from exc
+    if len(center) != 2 or any(not 0 <= part <= 1 for part in center):
+        raise argparse.ArgumentTypeError("crop center must contain two numbers from 0 to 1")
+    return center
+
+
+def cover(
+    image: Image.Image,
+    size: tuple[int, int],
+    centering: tuple[float, float] = (0.5, 0.5),
+) -> Image.Image:
+    return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=centering)
 
 
 def torn_mask(size: tuple[int, int], seed: int, jitter_ratio: float) -> Image.Image:
@@ -87,13 +101,18 @@ def compose(
     seed: int,
     jitter_ratio: float,
     rotation: float = 0.0,
+    crop_center: tuple[float, float] = (0.5, 0.5),
 ) -> Image.Image:
     canvas = background.convert("RGB")
     x, y, width, height = box
     x0, y0 = round(x * canvas.width), round(y * canvas.height)
     target_size = (round(width * canvas.width), round(height * canvas.height))
 
-    fragment = cover(ImageOps.exif_transpose(photo).convert("RGB"), target_size)
+    fragment = cover(
+        ImageOps.exif_transpose(photo).convert("RGB"),
+        target_size,
+        centering=crop_center,
+    )
     mask = torn_mask(target_size, seed=seed, jitter_ratio=jitter_ratio)
     photo_layer = fragment.convert("RGBA")
     photo_layer.putalpha(mask)
@@ -141,6 +160,12 @@ def main() -> None:
         default=0.0,
         help="rotate the restored photo fragment in degrees for diagonal layouts",
     )
+    parser.add_argument(
+        "--crop-center",
+        type=parse_center,
+        default=(0.5, 0.5),
+        help="normalized x,y focus point retained when fitting the original photo",
+    )
     args = parser.parse_args()
 
     if not 0.003 <= args.edge_jitter <= 0.08:
@@ -161,6 +186,7 @@ def main() -> None:
             args.seed,
             args.edge_jitter,
             args.rotation,
+            args.crop_center,
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     result.save(args.output, format="PNG")

@@ -1,23 +1,22 @@
 # Quality gates and targeted corrections
 
-Review the generated zine at normal size and as a thumbnail. Regenerate only for an observed failure and change one instruction at a time.
+Review the generated zine at normal size and as a thumbnail. Do not automatically submit a second remote generation. Correct photo fidelity, typography, and ordinary seam issues locally; request another generation only when the user approves it for an irreparable geometry or style failure.
 
 ## Photo fidelity
 
 Pass when the important photo fragment still has natural texture, recognizable identity, correct geometry, and source-like color.
 
-- **Repainted subject:** state that the supplied photo region is locked and must remain photographic; identify the exact face, garment, object, or landmark to preserve.
-- **Changed geometry:** restate the horizon, pose, gaze, path, or overlap as an invariant.
-- **Color grade over the photo:** prohibit global tinting and restore the ungraded source with `scripts/compose_anchor.py` when regeneration still drifts.
+- **Repainted subject or color grade:** restore the ungraded original with `scripts/compose_anchor.py`; do not regenerate for photo drift.
+- **Changed geometry inside the anchor:** restore the original with the correct `--box`, `--rotation`, and `--crop-center`.
+- **Generated continuation does not meet the restored anchor:** keep the first result, report the mismatch, and request approval before any new generation.
 
 ## Palette fidelity
 
 Pass when dominant source colors remain dominant in the painted field and minor source accents stay minor.
 
-- **Extension too pale:** repeat the source hex colors and ask for comparable saturation and value; prohibit a paper-colored veil.
-- **Extension too dark or muddy:** preserve distinct palette families and reduce overmixing.
-- **Invented accent:** replace it with a reported source accent and state its maximum visual share.
-- **Skin or product color drift:** lock that local color separately from the surrounding palette.
+- **Extension too pale, dark, or muddy:** report the generated-field mismatch; do not silently regenerate.
+- **Invented accent:** report the source and result colors before proposing another generation.
+- **Skin or product color drift:** restore the original anchor locally.
 
 Use `scripts/check_palette.py` on the anchor when visual inspection is uncertain. A low numeric difference can still hide a local problem, so always inspect important semantic colors.
 
@@ -57,7 +56,7 @@ Pass when the extension remains spatially convincing, delicate, and airy.
 Pass when the single English micro-text line is scene-related, exact, small, legible, and placed in quiet paper.
 
 - By default author one original English line of one to four words from visible content or atmosphere. Avoid quotations, attribution, dates, locations, and metadata.
-- Remove any additional invented words, pseudo-labels, dates, signatures, or credits.
-- If exact text renders incorrectly, regenerate once with the wording isolated and quoted. If it remains wrong, omit it unless the user asks for deterministic typography.
+- The remote generation must contain no new text; add the exact line with `scripts/render_micro_text.py` after anchor restoration.
+- If the remote result invents pseudo-text, cover it only when that can be done cleanly during local finishing; otherwise report it before proposing another generation.
 - Preserve legitimate signatures, provenance marks, and watermarks already present in an input.
 - Reject glossy mockup frames, curled-paper depth, strong drop shadows, and unrelated embellishment.
